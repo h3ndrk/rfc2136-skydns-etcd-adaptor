@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/urfave/cli"
 	"go.etcd.io/etcd/clientv3"
 )
 
@@ -60,11 +61,21 @@ type adaptor struct {
 	errorCh    <-chan error
 }
 
-func newAdaptor() (*adaptor, error) {
-	dnsServer := &dns.Server{Addr: ":5353", Net: "udp", MsgAcceptFunc: msgAcceptFunc}
+type adaptorConfig struct {
+	dnsListenAddr  string
+	dnsListenProto string
+	etcdDialAddr   string
+}
+
+func newAdaptor(cfg adaptorConfig) (*adaptor, error) {
+	dnsServer := &dns.Server{
+		Addr:          cfg.dnsListenAddr,
+		Net:           cfg.dnsListenProto,
+		MsgAcceptFunc: msgAcceptFunc,
+	}
 
 	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{"localhost:2379"},
+		Endpoints:   []string{cfg.etcdDialAddr},
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -249,19 +260,60 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+	var config adaptorConfig
 
-	a, err := newAdaptor()
-	if err != nil {
-		log.Fatal(err)
+	app := cli.NewApp()
+	app.Name = "rfc2136-skydns-etcd-adaptor"
+	app.Usage = "Adapts RFC2136 (DNS UPDATE) to SkyDNS/etcd for CoreDNS usage"
+
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:        "dns-listen-addr, l",
+			Usage:       "Listen address for DNS server",
+			Value:       ":53",
+			Destination: &config.dnsListenAddr,
+			EnvVar:      "ADAPTOR_DNS_LISTEN_ADDR",
+		},
+		cli.StringFlag{
+			Name:        "dns-listen-proto, p",
+			Usage:       "DNS proto to listen on",
+			Destination: &config.dnsListenProto,
+			Value:       "udp",
+			EnvVar:      "ADAPTOR_DNS_LISTEN_PROTO",
+		},
+		cli.StringFlag{
+			Name:        "etcd-dial-addr, a",
+			Value:       "",
+			Usage:       "Dial address to connect to etcd",
+			Destination: &config.etcdDialAddr,
+			EnvVar:      "ADAPTOR_ETCD_DIAL_ADDR",
+		},
 	}
-	defer a.shutdown()
 
-	select {
-	case s := <-c:
-		log.Printf("Got signal %v, exiting.", s)
-	case err := <-a.errorCh:
+	app.Action = func(_ *cli.Context) error {
+		log.Printf("Config: %+v", config)
+
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+
+		a, err := newAdaptor(config)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer a.shutdown()
+
+		select {
+		case s := <-c:
+			log.Printf("Got signal %v, exiting.", s)
+		case err := <-a.errorCh:
+			log.Fatal(err)
+		}
+
+		return nil
+	}
+
+	err := app.Run(os.Args)
+	if err != nil {
 		log.Fatal(err)
 	}
 }
