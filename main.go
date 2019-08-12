@@ -245,25 +245,6 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	m := new(dns.Msg)
 	m.SetReply(r)
-	// log.Printf("IsTsig(): %b", r.IsTsig() != nil)
-	// if r.IsTsig() != nil {
-	// 	if w.TsigStatus() == nil {
-	// 		// *Msg r has an TSIG record and it was validated
-	// 		m.SetTsig("axfr.", dns.HmacMD5, 300, time.Now().Unix())
-	// 	} else {
-	// 		// *Msg r has an TSIG records and it was not valided
-	// 	}
-	// }
-	/*rr := &dns.A{
-		Hdr: dns.RR_Header{Name: "hello.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
-		A:   net.IPv4(1, 2, 3, 4),
-	}
-	m.Answer = append(m.Answer, rr)
-	t := &dns.TXT{
-		Hdr: dns.RR_Header{Name: "foo.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-		Txt: []string{"Hello World!"},
-	}
-	m.Extra = append(m.Extra, t)*/
 	w.WriteMsg(m)
 }
 
@@ -283,21 +264,4 @@ func main() {
 	case err := <-a.errorCh:
 		log.Fatal(err)
 	}
-
-	// cli, err := clientv3.New(clientv3.Config{
-	// 	Endpoints:   []string{"localhost:2379"},
-	// 	DialTimeout: 5 * time.Second,
-	// })
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer cli.Close()
-
-	// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	// resp, err := cli.Put(ctx, "/skydns/sample_key", "sample_value")
-	// cancel()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// log.Print(resp)
 }
