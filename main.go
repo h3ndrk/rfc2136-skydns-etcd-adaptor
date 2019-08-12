@@ -283,7 +283,7 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:        "etcd-dial-addr, a",
-			Value:       "",
+			Value:       "localhost:2379",
 			Usage:       "Dial address to connect to etcd",
 			Destination: &config.etcdDialAddr,
 			EnvVar:      "ADAPTOR_ETCD_DIAL_ADDR",
