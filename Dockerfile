@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY . /app/
 
-RUN go build -o rfc2136-skydns-etcd-adaptor -v
+RUN CGO_ENABLED=0 GOOS=linux go build -o rfc2136-skydns-etcd-adaptor -v
 
 
 FROM scratch
