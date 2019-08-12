@@ -5,11 +5,11 @@ WORKDIR /app
 
 COPY . /app/
 
-RUN go build -o coredns-rfc2136-updater -v
+RUN go build -o rfc2136-skydns-etcd-adaptor -v
 
 
 FROM scratch
 
-COPY --from=builder /app/coredns-rfc2136-updater .
+COPY --from=builder /app/rfc2136-skydns-etcd-adaptor .
 
-ENTRYPOINT ["/coredns-rfc2136-updater"]
+ENTRYPOINT ["/rfc2136-skydns-etcd-adaptor"]

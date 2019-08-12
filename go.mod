@@ -1,4 +1,4 @@
-module github.com/NIPE-SYSTEMS/coredns-rfc2136-updater
+module github.com/NIPE-SYSTEMS/rfc2136-skydns-etcd-adaptor
 
 go 1.12
 
