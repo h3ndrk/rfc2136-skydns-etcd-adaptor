@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rfc2136-skydns-etcd-adaptor
+  namespace: dns
+  labels:
+    app: rfc2136-skydns-etcd-adaptor
+spec:
+  containers:
+  - name: rfc2136-skydns-etcd-adaptor
+    image: rfc2136-skydns-etcd-adaptor:v0.0.2
+    resources:
+      limits:
+        memory: "64Mi"
+        cpu: "100m"
+    ports:
+    - name: dns
+      containerPort: 53
+      protocol: UDP
+    env:
+    - name: ADAPTOR_ETCD_DIAL_ADDR
+      value: etcd-cluster-client:2379
