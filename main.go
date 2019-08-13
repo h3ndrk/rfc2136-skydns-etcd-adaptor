@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -63,6 +64,7 @@ type adaptor struct {
 	dnsServer    *dns.Server
 	errorCh      <-chan error
 	addrMapping  adaptorAddrMapping
+	updateMutex  sync.Mutex
 }
 
 type adaptorConfig struct {
@@ -240,6 +242,9 @@ func (a *adaptor) removeEtcdLeases(path string) []error {
 }
 
 func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	a.updateMutex.Lock()
+	defer a.updateMutex.Unlock()
+
 	log.Printf("Opcode: %d", r.Opcode)
 	log.Printf("Header: %+v", r.MsgHdr)
 	log.Printf("Question: %+v", r.Question[0])
