@@ -109,6 +109,34 @@ func (a *adaptor) shutdown() {
 	a.etcdClient.Close()
 }
 
+func domainNameToPath(prefix []string, domainName string) string {
+	nameParts := dns.SplitDomainName(domainName)
+
+	// reverse nameParts
+	for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
+		nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
+	}
+
+	return "/" + strings.Join(append(prefix, nameParts...), "/")
+}
+
+func recordAToJSONAndPathSuffix(record *dns.A) ([]byte, string, error) {
+	type etcdValue struct {
+		Host string `json:"host"`
+		TTL  uint32 `json:"ttl,omitempty"`
+	}
+
+	data, err := json.Marshal(etcdValue{record.A.String(), record.Hdr.Ttl})
+	if err != nil {
+		return nil, "", err
+	}
+
+	hasher := sha1.New()
+	hasher.Write(data)
+
+	return data, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
 func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Printf("Opcode: %d", r.Opcode)
 	log.Printf("Header: %+v", r.MsgHdr)
@@ -140,12 +168,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					// Del /skydns/nipe-systems (/foo/x1)
 					switch t := record.(type) {
 					case *dns.ANY:
-						nameParts := dns.SplitDomainName(t.Hdr.Name)
-						// reverse nameParts
-						for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
-							nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
-						}
-						path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
+						path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -164,12 +187,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					// Del /skydns/nipe-systems/foo
 					switch t := record.(type) {
 					case *dns.A:
-						nameParts := dns.SplitDomainName(t.Hdr.Name)
-						// reverse nameParts
-						for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
-							nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
-						}
-						path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
+						path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -189,25 +207,13 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				// Del /skydns/nipe-systems/foo/x1
 				switch t := record.(type) {
 				case *dns.A:
-					nameParts := dns.SplitDomainName(t.Hdr.Name)
-					// reverse nameParts
-					for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
-						nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
-					}
-					path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
+					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					type etcdValue struct {
-						Host string `json:"host"`
-						TTL  uint32 `json:"ttl,omitempty"`
-					}
-					data, err := json.Marshal(etcdValue{t.A.String(), t.Hdr.Ttl})
+					_, sha, err := recordAToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
-					hasher := sha1.New()
-					hasher.Write(data)
-					sha := hex.EncodeToString(hasher.Sum(nil))
 					path = path + "/" + sha
 
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -226,25 +232,13 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				// Put /skydns/nipe-systems/foo/x1
 				switch t := record.(type) {
 				case *dns.A:
-					nameParts := dns.SplitDomainName(t.Hdr.Name)
-					// reverse nameParts
-					for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
-						nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
-					}
-					path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
+					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					type etcdValue struct {
-						Host string `json:"host"`
-						TTL  uint32 `json:"ttl,omitempty"`
-					}
-					data, err := json.Marshal(etcdValue{t.A.String(), t.Hdr.Ttl})
+					data, sha, err := recordAToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
-					hasher := sha1.New()
-					hasher.Write(data)
-					sha := hex.EncodeToString(hasher.Sum(nil))
 					path = path + "/" + sha
 
 					log.Printf("  Put %s = %s", path, data)
