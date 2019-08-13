@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/urfave/cli"
 	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/etcdserver/api/v3rpc/rpctypes"
 )
 
 // https://github.com/miekg/dns/blob/9cfcfb2209aecb663673bd44b11f71c215186b80/types.go#L160
@@ -55,16 +57,19 @@ func msgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 }
 
 type adaptor struct {
-	etcdClient  *clientv3.Client
-	dnsServer   *dns.Server
-	errorCh     <-chan error
-	addrMapping adaptorAddrMapping
+	etcdClient   *clientv3.Client
+	etcdLeaseTTL int
+	etcdLeases   map[string]clientv3.LeaseID
+	dnsServer    *dns.Server
+	errorCh      <-chan error
+	addrMapping  adaptorAddrMapping
 }
 
 type adaptorConfig struct {
 	dnsListenAddr  string
 	dnsListenProto string
 	etcdDialAddr   string
+	etcdLeaseTTL   string
 	addrMapping    string
 }
 
@@ -73,6 +78,11 @@ type adaptorAddrMapping map[string]string
 func newAdaptor(cfg adaptorConfig) (*adaptor, error) {
 	var addrMapping adaptorAddrMapping
 	err := json.Unmarshal([]byte(cfg.addrMapping), &addrMapping)
+	if err != nil {
+		return nil, err
+	}
+
+	etcdLeaseTTL, err := strconv.Atoi(cfg.etcdLeaseTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -95,10 +105,12 @@ func newAdaptor(cfg adaptorConfig) (*adaptor, error) {
 	errorCh := make(chan error, 1)
 
 	a := &adaptor{
-		etcdClient:  etcdClient,
-		dnsServer:   dnsServer,
-		errorCh:     errorCh,
-		addrMapping: addrMapping,
+		etcdClient:   etcdClient,
+		etcdLeaseTTL: etcdLeaseTTL,
+		etcdLeases:   map[string]clientv3.LeaseID{},
+		dnsServer:    dnsServer,
+		errorCh:      errorCh,
+		addrMapping:  addrMapping,
 	}
 
 	dns.HandleFunc(".", a.handleRequest)
@@ -172,6 +184,61 @@ func (a *adaptor) recordTXTToJSONAndPathSuffix(record *dns.TXT) ([]byte, string,
 	return data, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+func (a *adaptor) updateEtcdLease(path string) (clientv3.LeaseID, error) {
+	leaseID, ok := a.etcdLeases[path]
+
+	if ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := a.etcdClient.KeepAliveOnce(ctx, leaseID)
+		cancel()
+		if err != nil {
+			if err.Error() == rpctypes.ErrLeaseNotFound.Error() {
+				ok = false // treat this error as not found error -> grant new lease
+			} else {
+				return 0, err
+			}
+		} else {
+			log.Printf("  Refreshed lease %d", leaseID)
+		}
+	}
+
+	if !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		resp, err := a.etcdClient.Grant(ctx, int64(a.etcdLeaseTTL))
+		cancel()
+		if err != nil {
+			return 0, err
+		}
+
+		log.Printf("  Granted new lease %d with TTL=%ds", resp.ID, a.etcdLeaseTTL)
+
+		// store lease ID
+		a.etcdLeases[path] = resp.ID
+		leaseID = resp.ID
+	}
+
+	return leaseID, nil
+}
+
+func (a *adaptor) removeEtcdLeases(path string) []error {
+	errs := []error{}
+
+	for leasePath, leaseID := range a.etcdLeases {
+		if strings.HasPrefix(leasePath, path) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := a.etcdClient.Revoke(ctx, leaseID)
+			cancel()
+			if err != nil && err.Error() != rpctypes.ErrGRPCLeaseNotFound.Error() {
+				errs = append(errs, err)
+			}
+			log.Printf("  Revoked lease %d", leaseID)
+			delete(a.etcdLeases, leasePath)
+		}
+	}
+
+	return errs
+}
+
 func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Printf("Opcode: %d", r.Opcode)
 	log.Printf("Header: %+v", r.MsgHdr)
@@ -213,6 +280,11 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 							log.Print(err)
 						}
 						log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+
+						errs := a.removeEtcdLeases(path)
+						for _, err := range errs {
+							log.Print(err)
+						}
 					default:
 						log.Printf("  Type %T not implemented", t)
 					}
@@ -232,6 +304,11 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 							log.Print(err)
 						}
 						log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+
+						errs := a.removeEtcdLeases(path)
+						for _, err := range errs {
+							log.Print(err)
+						}
 					case *dns.TXT:
 						path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
@@ -243,6 +320,11 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 							log.Print(err)
 						}
 						log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+
+						errs := a.removeEtcdLeases(path)
+						for _, err := range errs {
+							log.Print(err)
+						}
 					default:
 						log.Printf("  Type %T not implemented", t)
 					}
@@ -269,6 +351,11 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 						log.Print(err)
 					}
 					log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+
+					errs := a.removeEtcdLeases(path)
+					for _, err := range errs {
+						log.Print(err)
+					}
 				case *dns.TXT:
 					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
@@ -286,6 +373,11 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 						log.Print(err)
 					}
 					log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+
+					errs := a.removeEtcdLeases(path)
+					for _, err := range errs {
+						log.Print(err)
+					}
 				default:
 					log.Printf("  Type %T not implemented", t)
 				}
@@ -304,9 +396,14 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 					path = path + "/" + sha
 
+					leaseID, err := a.updateEtcdLease(path)
+					if err != nil {
+						log.Print(err)
+					}
+
 					log.Printf("  Put %s = %s", path, data)
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					resp, err := a.etcdClient.Put(ctx, path, string(data))
+					resp, err := a.etcdClient.Put(ctx, path, string(data), clientv3.WithLease(leaseID))
 					cancel()
 					if err != nil {
 						log.Print(err)
@@ -326,9 +423,14 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 					path = path + "/" + sha
 
+					leaseID, err := a.updateEtcdLease(path)
+					if err != nil {
+						log.Print(err)
+					}
+
 					log.Printf("  Put %s = %s", path, data)
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					resp, err := a.etcdClient.Put(ctx, path, string(data))
+					resp, err := a.etcdClient.Put(ctx, path, string(data), clientv3.WithLease(leaseID))
 					cancel()
 					if err != nil {
 						log.Print(err)
@@ -377,6 +479,13 @@ func main() {
 			Usage:       "Dial address to connect to etcd",
 			Destination: &config.etcdDialAddr,
 			EnvVar:      "ADAPTOR_ETCD_DIAL_ADDR",
+		},
+		cli.StringFlag{
+			Name:        "etcd-lease-ttl, t",
+			Value:       "300",
+			Usage:       "Lease Time-to-live for individual keys (auto cleanup of keys)",
+			Destination: &config.etcdLeaseTTL,
+			EnvVar:      "ADAPTOR_ETCD_LEASE_TTL",
 		},
 		cli.StringFlag{
 			Name:        "addr-mapping, m",
