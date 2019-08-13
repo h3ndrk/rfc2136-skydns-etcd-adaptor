@@ -382,7 +382,7 @@ func main() {
 			Name:        "addr-mapping, m",
 			Value:       "{}",
 			Usage:       "Address mapping in JSON: if a key address is matched the value address is used instead",
-			Destination: &config.etcdDialAddr,
+			Destination: &config.addrMapping,
 			EnvVar:      "ADAPTOR_ADDR_MAPPING",
 		},
 	}
