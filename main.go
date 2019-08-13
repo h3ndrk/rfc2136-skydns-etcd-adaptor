@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -142,7 +141,10 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					switch t := record.(type) {
 					case *dns.ANY:
 						nameParts := dns.SplitDomainName(t.Hdr.Name)
-						sort.Sort(sort.Reverse(sort.StringSlice(nameParts)))
+						// reverse nameParts
+						for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
+							nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
+						}
 						path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
 						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
@@ -163,7 +165,10 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					switch t := record.(type) {
 					case *dns.A:
 						nameParts := dns.SplitDomainName(t.Hdr.Name)
-						sort.Sort(sort.Reverse(sort.StringSlice(nameParts)))
+						// reverse nameParts
+						for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
+							nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
+						}
 						path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
 						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
@@ -185,7 +190,10 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				switch t := record.(type) {
 				case *dns.A:
 					nameParts := dns.SplitDomainName(t.Hdr.Name)
-					sort.Sort(sort.Reverse(sort.StringSlice(nameParts)))
+					// reverse nameParts
+					for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
+						nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
+					}
 					path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
@@ -219,7 +227,10 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				switch t := record.(type) {
 				case *dns.A:
 					nameParts := dns.SplitDomainName(t.Hdr.Name)
-					sort.Sort(sort.Reverse(sort.StringSlice(nameParts)))
+					// reverse nameParts
+					for i, j := 0, len(nameParts)-1; i < j; i, j = i+1, j-1 {
+						nameParts[i], nameParts[j] = nameParts[j], nameParts[i]
+					}
 					path := "/" + strings.Join(append([]string{"skydns"}, nameParts...), "/")
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
