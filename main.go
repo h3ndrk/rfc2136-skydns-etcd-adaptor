@@ -228,7 +228,7 @@ func (a *adaptor) removeEtcdLeases(path string) []error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_, err := a.etcdClient.Revoke(ctx, leaseID)
 			cancel()
-			if err != nil && err.Error() != rpctypes.ErrGRPCLeaseNotFound.Error() {
+			if err != nil && err.Error() != rpctypes.ErrLeaseNotFound.Error() {
 				errs = append(errs, err)
 			}
 			log.Printf("  Revoked lease %d", leaseID)
