@@ -55,18 +55,28 @@ func msgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 }
 
 type adaptor struct {
-	etcdClient *clientv3.Client
-	dnsServer  *dns.Server
-	errorCh    <-chan error
+	etcdClient  *clientv3.Client
+	dnsServer   *dns.Server
+	errorCh     <-chan error
+	addrMapping adaptorAddrMapping
 }
 
 type adaptorConfig struct {
 	dnsListenAddr  string
 	dnsListenProto string
 	etcdDialAddr   string
+	addrMapping    string
 }
 
+type adaptorAddrMapping map[string]string
+
 func newAdaptor(cfg adaptorConfig) (*adaptor, error) {
+	var addrMapping adaptorAddrMapping
+	err := json.Unmarshal([]byte(cfg.addrMapping), &addrMapping)
+	if err != nil {
+		return nil, err
+	}
+
 	dnsServer := &dns.Server{
 		Addr:          cfg.dnsListenAddr,
 		Net:           cfg.dnsListenProto,
@@ -85,9 +95,10 @@ func newAdaptor(cfg adaptorConfig) (*adaptor, error) {
 	errorCh := make(chan error, 1)
 
 	a := &adaptor{
-		etcdClient: etcdClient,
-		dnsServer:  dnsServer,
-		errorCh:    errorCh,
+		etcdClient:  etcdClient,
+		dnsServer:   dnsServer,
+		errorCh:     errorCh,
+		addrMapping: addrMapping,
 	}
 
 	dns.HandleFunc(".", a.handleRequest)
@@ -120,13 +131,19 @@ func domainNameToPath(prefix []string, domainName string) string {
 	return "/" + strings.Join(append(prefix, nameParts...), "/")
 }
 
-func recordAToJSONAndPathSuffix(record *dns.A) ([]byte, string, error) {
+func (a *adaptor) recordAToJSONAndPathSuffix(record *dns.A) ([]byte, string, error) {
 	type etcdValue struct {
 		Host string `json:"host"`
 		TTL  uint32 `json:"ttl,omitempty"`
 	}
 
-	data, err := json.Marshal(etcdValue{record.A.String(), record.Hdr.Ttl})
+	// try to map address
+	mappedAddress, ok := a.addrMapping[record.A.String()]
+	if !ok {
+		mappedAddress = record.A.String()
+	}
+
+	data, err := json.Marshal(etcdValue{mappedAddress, record.Hdr.Ttl})
 	if err != nil {
 		return nil, "", err
 	}
@@ -137,7 +154,7 @@ func recordAToJSONAndPathSuffix(record *dns.A) ([]byte, string, error) {
 	return data, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func recordTXTToJSONAndPathSuffix(record *dns.TXT) ([]byte, string, error) {
+func (a *adaptor) recordTXTToJSONAndPathSuffix(record *dns.TXT) ([]byte, string, error) {
 	type etcdValue struct {
 		Text string `json:"text"`
 		TTL  uint32 `json:"ttl,omitempty"`
@@ -239,7 +256,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					_, sha, err := recordAToJSONAndPathSuffix(t)
+					_, sha, err := a.recordAToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
@@ -256,7 +273,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					_, sha, err := recordTXTToJSONAndPathSuffix(t)
+					_, sha, err := a.recordTXTToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
@@ -281,7 +298,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					data, sha, err := recordAToJSONAndPathSuffix(t)
+					data, sha, err := a.recordAToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
@@ -303,7 +320,7 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
-					data, sha, err := recordTXTToJSONAndPathSuffix(t)
+					data, sha, err := a.recordTXTToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
@@ -360,6 +377,13 @@ func main() {
 			Usage:       "Dial address to connect to etcd",
 			Destination: &config.etcdDialAddr,
 			EnvVar:      "ADAPTOR_ETCD_DIAL_ADDR",
+		},
+		cli.StringFlag{
+			Name:        "addr-mapping, m",
+			Value:       "{}",
+			Usage:       "Address mapping in JSON: if a key address is matched the value address is used instead",
+			Destination: &config.etcdDialAddr,
+			EnvVar:      "ADAPTOR_ADDR_MAPPING",
 		},
 	}
 
