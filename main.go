@@ -137,6 +137,24 @@ func recordAToJSONAndPathSuffix(record *dns.A) ([]byte, string, error) {
 	return data, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+func recordTXTToJSONAndPathSuffix(record *dns.TXT) ([]byte, string, error) {
+	type etcdValue struct {
+		Text string `json:"text"`
+		TTL  uint32 `json:"ttl,omitempty"`
+	}
+
+	// only use the first TXT rrdata
+	data, err := json.Marshal(etcdValue{record.Txt[0], record.Hdr.Ttl})
+	if err != nil {
+		return nil, "", err
+	}
+
+	hasher := sha1.New()
+	hasher.Write(data)
+
+	return data, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
 func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Printf("Opcode: %d", r.Opcode)
 	log.Printf("Header: %+v", r.MsgHdr)
@@ -197,6 +215,17 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 							log.Print(err)
 						}
 						log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+					case *dns.TXT:
+						path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
+						log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
+
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						resp, err := a.etcdClient.Delete(ctx, path, clientv3.WithPrefix())
+						cancel()
+						if err != nil {
+							log.Print(err)
+						}
+						log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
 					default:
 						log.Printf("  Type %T not implemented", t)
 					}
@@ -223,6 +252,23 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 						log.Print(err)
 					}
 					log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
+				case *dns.TXT:
+					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
+					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
+
+					_, sha, err := recordTXTToJSONAndPathSuffix(t)
+					if err != nil {
+						fmt.Println("error:", err)
+					}
+					path = path + "/" + sha
+
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					resp, err := a.etcdClient.Delete(ctx, path)
+					cancel()
+					if err != nil {
+						log.Print(err)
+					}
+					log.Printf("  Successfully deleted %d keys from etcd", resp.Deleted)
 				default:
 					log.Printf("  Type %T not implemented", t)
 				}
@@ -236,6 +282,28 @@ func (a *adaptor) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
 
 					data, sha, err := recordAToJSONAndPathSuffix(t)
+					if err != nil {
+						fmt.Println("error:", err)
+					}
+					path = path + "/" + sha
+
+					log.Printf("  Put %s = %s", path, data)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					resp, err := a.etcdClient.Put(ctx, path, string(data))
+					cancel()
+					if err != nil {
+						log.Print(err)
+					}
+					if resp.PrevKv != nil {
+						log.Printf("  Successfully overwritten key in etcd (previous: %s)", resp.PrevKv.Value)
+					} else {
+						log.Printf("  Successfully put key in etcd")
+					}
+				case *dns.TXT:
+					path := domainNameToPath([]string{"skydns"}, t.Hdr.Name)
+					log.Printf("  Path: %s -> %s", t.Hdr.Name, path)
+
+					data, sha, err := recordTXTToJSONAndPathSuffix(t)
 					if err != nil {
 						fmt.Println("error:", err)
 					}
